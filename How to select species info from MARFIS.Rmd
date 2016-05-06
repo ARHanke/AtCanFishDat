@@ -1,0 +1,254 @@
+---
+title: "An Example of How to extract data from MARFIS"
+author: "Alex Hanke"
+date: "March 29, 2016"
+output: word_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+#Load some packages
+
+```{r cars}
+library(RODBC)
+require(sqldf)
+#require(RH2)
+library(reshape2)
+library(ggplot2)
+memory.limit(size=4095)
+
+channel <- odbcConnect("ptran", uid="hankea", pwd="StAndr3ws",believeNRows=F)
+```
+This shows us all the schemas available
+```{r}
+unique(sqlTables(channel)$TABLE_SCHEM)
+```
+These are just the MARFISSCI tables and views. Try one of the others like OBSERVER yourself.
+```{r}
+sqlTables(channel,schema="MARFISSCI")
+```
+This is a query that extracts the Swordfish catches.
+Step one is to figure out the code for swordfish.
+```{r}
+# What is the species code for SWO? We know from above that there is a table called species. But what are the column names?
+SC = names (sqlQuery(channel,paste("select * from marfissci.species where rownum < 5")))
+SC
+#  [1] "SPECIES_CODE"        "SPECIES_CATEGORY_ID" "DESC_ENG"            "DESC_FRE"           
+#  [5] "SPECIES_ABBREV_ENG"  "SPECIES_ABBREV_FRE"  "LICENCE_DESC_ENG"    "LICENCE_DESC_FRE"   
+#  [9] "CUSER"               "CDATE"               "UUSER"               "UDATE"              
+# [13] "ENTITLEMENT_FLAG"    "CE_FLAG"             "LINE_OBJECT"         "NAFO_SPECIES_CODE"  
+# [17] "GEAR_TAG_FLAG" 
+
+GC = names (sqlQuery(channel,paste("select * from marfissci.gears where rownum < 5")))
+
+# So the important columns are species_code and desc_eng
+SWO = sqlQuery(channel,paste("SELECT SPECIES_CODE, DESC_ENG FROM marfissci.species",
+                             "WHERE DESC_ENG  LIKE '%SWORD%'"))
+SWO
+
+BFT = sqlQuery(channel,paste("SELECT SPECIES_CODE, DESC_ENG FROM marfissci.species",
+                             "WHERE DESC_ENG  LIKE '%BLUE%'"))
+BFT
+#   SPECIES_CODE  DESC_ENG
+# 1          251 SWORDFISH
+# 4          254 TUNA, BLUEFIN
+
+# 
+# You can repeat this exercise to figure out the names for NAFO_UNIT_AREA_ID and GEAR_CODE. Below is the solution for NAFO area. You can merge this to you swordfish data object easily provided it has the NAFO_UNIT_AREA_ID column (eg. merge(PSI,nafos, all.x=T))
+        # nafos<-sqlQuery(channel,paste('select AREA_ID, AREA',
+        #                'FROM marfissci.nafo_unit_areas',
+        #                'GROUP BY AREA_ID, AREA'))
+        # names(nafos)<-c('NAFO_UNIT_AREA_ID','NAFO_UNIT')
+GEARS = sqlQuery(channel,paste("SELECT GEAR_CODE, GEAR_TYPE_ID, DESC_ENG FROM",
+                               "marfissci.gears where GEAR_CODE in (51,54,60,61,81,85)"))
+
+```
+
+Now lets extract one year of data.
+```{r}
+# We know that the data is in the pro_spc_info table, but what are the columns of interest?
+PSI_col = names (sqlQuery(channel,paste("select * from marfissci.pro_spc_info where rownum < 5")))
+PSI_col
+#  [1] "PRO_SPC_INFO_ID"         "TRIP_ID"                 "VR_NUMBER_FISHING"       "VR_NUMBER_LANDING"    
+#  [5] "LOG_EFRT_STD_INFO_ID"    "SPECIES_CODE"            "SPECIES_SIZE_CODE"       "LANDED_FORM_CODE"     
+#  [9] "CATCH_USAGE_CODE"        "FISH_VALUE_SECTOR_ID"    "FISH_VALUE_CODE"         "FISH_GRADE_SECTOR_ID" 
+# [13] "FISH_GRADE_CODE"         "NAFO_UNIT_AREA_ID"       "FISHING_AREA_ID"         "GEAR_CODE"            
+# [17] "DATE_FISHED"             "LIC_QUOTA_ID"            "LICENCE_ID"              "RND_WEIGHT_KGS"       
+# [21] "RPT_WEIGHT_KGS"          "POST_TO_QUOTA_FLAG"      "PRORATION_RATIO"         "REC_GENERATED_FLAG"   
+# [25] "LANDED_DATE"             "COMMUNITY_CODE"          "BUYER_ID"                "PRICE_CDN_RPT_KG"     
+# [29] "MON_DOC_ID"              "SUM_DOC_ID"              "SD_LOG_EFRT_STD_INFO_ID" "LATITUDE"             
+# [33] "LONGITUDE"               "SPC_TAG_ID"              "CDATE"  
+
+# We need date, trip, set, species, weight, gear, lat and lon.
+
+PSI = sqlQuery(channel,paste("SELECT TRIP_ID, LOG_EFRT_STD_INFO_ID, SPECIES_CODE, GEAR_CODE, DATE_FISHED,",
+                             "RND_WEIGHT_KGS, LATITUDE, LONGITUDE FROM marfissci.pro_spc_info",
+                             "WHERE GEAR_CODE in (SELECT distinct(GEAR_CODE) FROM marfissci.pro_spc_info",
+                             "WHERE SPECIES_CODE = 254)",
+                             "AND EXTRACT(year FROM DATE_FISHED) in (2015,2014,2013,2012,2011,2010,2009,2008,2007,2006,2005,2004,2003)"))
+```
+Lets look at what we got.
+```{r}
+# First few rows
+head(PSI)
+#   TRIP_ID LOG_EFRT_STD_INFO_ID SPECIES_CODE GEAR_CODE         DATE_FISHED RND_WEIGHT_KGS LATITUDE LONGITUDE
+# 1  127974               303709          100        12 2005-04-05 06:10:00          5.132   431600    664800
+# 2  127974               303717          110        12 2005-04-07 06:40:00         22.453   424300    665200
+# 3  127974               303716          110        12 2005-04-07 00:20:00         64.865   423700    663400
+# 4  127974               303715          110        12 2005-04-06 20:55:00         74.844   423500    663800
+# 5  127974               303714          110        12 2005-04-06 15:05:00         14.969   422900    664700
+# 6  127974               303713          110        12 2005-04-06 09:30:00         17.464   423100    665300
+# Last few rows
+tail(PSI)
+# TRIP_ID LOG_EFRT_STD_INFO_ID SPECIES_CODE GEAR_CODE         DATE_FISHED RND_WEIGHT_KGS LATITUDE LONGITUDE
+# 154277               375054          142        12 2005-12-31 23:45:00         85.443   434900  625000
+# 154277               375054          177        12 2005-12-31 23:45:00          3.884   434900  625000
+# 154277               375054          180        12 2005-12-31 23:45:00         27.186   434900  625000
+# 154277               375054          350        12 2005-12-31 23:45:00         11.651   434900  625000
+# 154275               375058          142        12 2005-12-31 21:30:00          4.560   435700  625000
+# 154275               375058          180        12 2005-12-31 21:30:00         13.614   435700  625000
+
+# Notice that we only have one year of data. Notice that the date is a complex date-time object and that latitude and longitude are in HHMMSS. We can address this later. First, what gears are important?
+xtabs(~SPECIES_CODE+GEAR_CODE,PSI)
+#             GEAR_CODE
+# SPECIES_CODE    12    41    51    54    60    81
+#          100 21177  2381  4395     0     0     0
+#          110 33571  1100  3550     0     0     0
+#          120 12362   256   421     0     0     0
+#          130  3531   128  5172     0     0     0
+#          140  2753   139   167     0     0     0
+#          141  1790     8    14     0     0     0
+#          142 11248     3     0     0     0     0
+#          143  7100    39     1     0     0     0
+#          144   881    13   523     0     0     0
+#          146     6     0     0     0     0     0
+#          149  2094   321    76     0     0     0
+#          160   601   120    87     0     0     0
+#          161   234   159   626     0     0     0
+#          170 15468  2263  1409     0     0     0
+#          171  9525  2024  3074     0     0     0
+#          172  4425    30     3     0     0     0
+#          173  2917   639  3312     0     0     0
+#          174  3126    81  1097     0     0     0
+#          176     3     1     0     0     0     0
+#          177  9725  1098  1467     0     0     0
+#          179    22     0    27     0     0     0
+#          180  4392     0     0     0     0     0
+#          181  2098   218    16     0     0     0
+#          190    29     6    22     0     0     0
+#          197     0     0     1     0     0     0
+#          199   123     5     8     0     0     0
+#          200  2912  1078     0     0     0     0
+#          250   221   558     0     0     0     0
+#          251     0     0  1910     0     0  1530
+#          252     0     0   794    28   251     0
+#          253     0     0   984    34   105     0
+#          254     0     0   268    50  1276     0
+#          256     0     0   825     0     9     0
+#          259     0     0    98     0     1     0
+#          261     0     0    13     0     0     0
+#          262     0     0   168     0     9    17
+#          263     0     0   726     0     0     0
+#          299     0     0     1     0     0     0
+#          350  2406    90     0     0     0     0
+#          351   124     4     0     0     0     0
+#          355    75    89     0     0     0     0
+#          357     0   544     0     0     0     0
+#          369    31   109   357     0     2     0
+#          371     0     4     7     0     0     0
+#          372    23    10     7     0     0     0
+#          373     0     1    16     0     0     0
+#          374     0     0    18     0     0     0
+#          375    22   108   908     0     0    22
+#          377     0     0    10     0     0     0
+#          379     7    64    65     0     1     0
+#          613  1433     0     0     0     0     0
+#          944   102     0     0     0     0     0
+#          952     0    12    26     0     0     0
+#          956     0    66   219     0     0     0
+
+# Scrolling down to 251 (SWO) we see that only 2 gears have records, 51 and 81. Why? I thought we asked for gears that caught swordfish? Because we asked for gears catching SWO over all the years and only extracted those gears for one year, its likely that those gears caught SWO in an unselected year. 
+
+# To remove the unwanted gear types we subset.
+PSI = subset(PSI, GEAR_CODE%in%c(51,54,60,61,81,85))
+xtabs(~SPECIES_CODE+GEAR_CODE,PSI)
+# Now our list is long and narrow. 2 gears by many species.
+```
+
+
+So how do we fix the coordinates so that we can plot them? 
+```{r}
+# check the variables
+str(PSI)
+# 'data.frame':	34457 obs. of  9 variables:
+#  $ TRIP_ID             : int  126152 126152 126152 126152 126152 126152 126152 126168 128582 128590 ...
+#  $ LOG_EFRT_STD_INFO_ID: int  299081 299081 299081 299081 299082 299082 299082 299069 306385 306383 ...
+#  $ SPECIES_CODE        : int  130 144 171 173 130 171 173 130 130 100 ...
+#  $ GEAR_CODE           : int  51 51 51 51 51 51 51 51 51 51 ...
+#  $ DATE_FISHED         : POSIXct, format: "2005-03-06" "2005-03-06" "2005-03-06" "2005-03-06" ...
+#  $ RND_WEIGHT_KGS      : num  486.9 32.9 815.2 141.5 243.5 ...
+#  $ LATITUDE            : int  425000 425000 425000 425000 425000 425000 425000 433200 435700 435100 ...
+#  $ LONGITUDE           : int  624500 624500 624500 624500 623400 623400 623400 642500 622300 631400 ...
+
+# so the coordinates are perceived as being an integer. Lets verify the range of the degrees, minutes and seconds place holders. Minutes and seconds should range from 0 to 59.
+
+range(unique(trunc(PSI$LATITUDE/10000)),na.rm=T) # range of degrees
+# 38 63 <- that's OK
+
+range(unique(trunc(PSI$LATITUDE/100)%%100),na.rm=T) # range of minutes
+# 0 59 <- that's OK
+
+range(unique(PSI$LATITUDE%%100),na.rm=T) # range of seconds
+# 0 99 <- that's not OK! Looks like we have a decimal minute.
+
+
+range(unique(trunc(PSI$LATITUDE/100)/100),na.rm=T)
+
+# So the new coordinates are ...
+PSI$LAT_new  = with(PSI,trunc(LATITUDE/10000)+(LATITUDE%%10000/100)/60)
+PSI$LON_new = with(PSI,trunc(LONGITUDE/10000)+(LONGITUDE%%10000/100)/60)
+```
+How do we create separte month, day or year columns?
+```{r}
+PSI$YEAR = with(PSI, format(strptime(as.character(DATE_FISHED),"%Y-%m-%d"),"%Y"))
+PSI$MONTH = with(PSI, format(strptime(as.character(DATE_FISHED),"%Y-%m-%d"),"%m"))
+PSI$DAY = with(PSI, format(strptime(as.character(DATE_FISHED),"%Y-%m-%d"),"%d"))
+```
+
+So now we should think about simplifying the data a little. Lets get rid of the redundant columns and show the set level catch for just swordfish.
+```{r}
+# start by subseting again
+PSI = subset(PSI, select=c(LOG_EFRT_STD_INFO_ID, SPECIES_CODE, GEAR_CODE, RND_WEIGHT_KGS, LAT_new, LON_new, YEAR, MONTH, DAY ))
+head(PSI)
+#     LOG_EFRT_STD_INFO_ID SPECIES_CODE GEAR_CODE RND_WEIGHT_KGS  LAT_new  LON_new YEAR MONTH DAY
+# 474               299081          130        51        486.945 42.83333 62.75000 2005    03  06
+# 475               299081          144        51         32.931 42.83333 62.75000 2005    03  06
+# 476               299081          171        51        815.185 42.83333 62.75000 2005    03  06
+# 477               299081          173        51        141.522 42.83333 62.75000 2005    03  06
+# 478               299082          130        51        243.473 42.83333 62.56667 2005    03  07
+# 479               299082          171        51        217.383 42.83333 62.56667 2005    03  07
+
+# Now for each set we want the weight of SWO caught as well as the other meta data. Note: we multiply the weight by the presence/absence so that non-swordfish have a weight of zero. That way when we sum the weight for a set, we only get the weight of swordfish and we get a zero when no swordfish were caught.
+PSI2 = aggregate(I(c(SPECIES_CODE==251)*RND_WEIGHT_KGS)~LOG_EFRT_STD_INFO_ID+LAT_new+LON_new+YEAR+MONTH+DAY+GEAR_CODE, data=PSI, function(x) sum(x,na.rm=T))
+# we need to rename the last column
+names(PSI2)[length(names(PSI2))] = "WEIGHT_KGS"
+head(PSI2)
+# 1               297454 44.89667 56.08833 2005    01  01        51          0
+# 2               290719 44.61667 56.50000 2005    01  01        51          0
+# 3               291705 44.66667 57.00000 2005    01  01        51          0
+# 4               297238 44.11667 59.23333 2005    02  01        51          0
+# 5               295635 44.30000 59.41667 2005    02  01        51          0
+# 6               295920 43.58167 59.70000 2005    02  01        51          0
+
+# Let's check that the first entry is correct
+subset(PSI, LOG_EFRT_STD_INFO_ID==327488) # <- Looks OK
+# LOG_EFRT_STD_INFO_ID SPECIES_CODE GEAR_CODE RND_WEIGHT_KGS  LAT_new  LON_new YEAR MONTH DAY
+# 327488               130          51        106.006         44.15533 66.26833 2005    07  04
+```
+Now we should plot the presence/absence 
+```{r}
+ggplot(PSI2,aes(x=-LON_new,y=LAT_new,col=WEIGHT_KGS==0,size=WEIGHT_KGS)) + geom_point(alpha=.5) +ylim(c(38,50))+facet_wrap(~GEAR_CODE,ncol=1)
+```
+
