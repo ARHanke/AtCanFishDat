@@ -1,0 +1,77 @@
+---
+title: "Create a Summary of the contents of each Observer table"
+author: "Alex Hanke"
+date: "March 30, 2016"
+output: word_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+#Load some packages
+
+```{r cars}
+library(RODBC)
+require(plyr)
+memory.limit(size=4095)
+
+channel <- odbcConnect("ptran", uid="hankea", pwd="StAndr3ws",believeNRows=F)
+```
+Create a list of all possible tables within MARFIS
+```{r cars}
+TableName = subset(sqlTables(channel,schema="OBSERVER"),select=c(TABLE_SCHEM,TABLE_NAME))
+# catenate schema and name
+TableName = with(TableName, paste(TABLE_SCHEM,TABLE_NAME,sep="."))
+```
+We probably do not need to look inside every table because some are similar and some are for specific users.
+```{r}
+EXEMPTIONS = c("AFISP_","PFISP_","LOBSTER","CRAB","HERRING","MACKEREL","SHRIMP","SCALLOP","URCHIN")
+EXEMPT_idx = unlist(lapply(EXEMPTIONS, function(x) grep(x,TableName)))
+TableName = TableName[-EXEMPT_idx] # this should result in half as many tables
+```
+
+Open and close each table in turn.
+```{r , echo=FALSE}
+if(exists("Table_desc")){rm(Table_desc)}
+# Create a list of OBSERVER tables where eac table has 4 rows  
+for(i in TableName){
+  if(!exists("Table_desc")){ Table_desc = 
+  list(t(sqlQuery(channel, paste("select * from ",
+                        i,
+                        " where rownum<5"))))
+  names(Table_desc)=get("i")}
+  
+  temp = list(t(sqlQuery(channel, paste("select * from ",
+                        i,
+                        " where rownum<5"))))
+  names(temp)=get("i")
+  Table_desc = c(Table_desc,temp)
+}
+
+# rename the elements of the list
+names(Table_desc) = unlist(lapply(strsplit(names(Table_desc),"[.]"),function(x) x[2]))
+```
+Save to file. First we need to process the list so that each element is a dataframe and we should identify the table name before binding it all together.
+```{r}
+# Not all tables are populated so we need to remove any that are empty otherwise the next part will crash
+valid = unlist(lapply(Table_desc,function(x) dim(x)[2]))>0
+#valid = valid & unlist(lapply(Table_desc,function(x) substring(x[1],1,5)!="HY000"))
+names(Table_desc)[valid]
+
+for(i in (1:length(Table_desc))[valid] ){
+  temp = as.data.frame(Table_desc[[i]])
+  temp = cbind(data.frame(Name=rownames(temp)),temp)
+  nodata <- as.data.frame(setNames(replicate(5,numeric(0), simplify = F), letters[1:5]))
+   names(nodata) = c(names(temp)[1],1:4)
+  nodata[1,] = c(names(Table_desc[i]),rep("",4))
+  temp = rbind.fill(nodata,temp)
+    if(i==1){
+      Table_desc2 = temp
+    }else{Table_desc2 = rbind.fill(Table_desc2,temp)
+    }
+  }
+
+write.csv(Table_desc2, file="OBSERVER_tables_summary.csv")
+```
+

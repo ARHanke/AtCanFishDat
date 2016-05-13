@@ -1,0 +1,305 @@
+---
+title: "Swordfish Long-line Data Selection for Joint Index"
+author: "Alex Hanke"
+date: "Monday, May 9, 2016"
+output: word_document
+---
+
+This script is designed to extract observer data from the long line fishery for use in the Joint index. It is similar to the extraction used for bycatch.
+```{r}
+require(RODBC)
+require(sqldf)
+require(plyr)
+require(reshape2) # <-- must be loaded before data.table
+require(data.table)
+channel <- odbcConnect("ptran", uid="iandrush", pwd="d87xx2hb",believeNRows=F)
+channel <- odbcConnect("ptran", uid="hankea", pwd="StAndr3ws",believeNRows=F)
+
+```
+# This extracts the observer data for cases where we have a fish id. Please note that the addition of point codes may force a selection of longline trips.  
+```{r}
+obsSWO_det <- as.data.table(
+  sqlQuery(channel,paste("Select b.trip_id,b.trip,",
+      "b.tripcd_id, b.LICENSE_NO, b.MARFIS_LICENSE_NO, b.vess_id,",
+      "b.board_date, b.landing_date, a.fishset_id,",
+      "ROUND(1+b.landing_date-b.board_date,1) as seadays,",
+      "c.gearcd_id as gear, a.gear_id, c.hookcd_id, c.hooksize,",
+      "a.set_no, a.setcd_id, a.specscd_id, a.est_catch,",
+      "a.nafarea_id, a.num_hook_haul, a.len_longline, a.source as s,",
+      "d.speccd_id, d.est_num_caught, d.est_combined_wt,",
+      " d.est_discard_wt, e.GRT as gross_tonnage, e.cfv,",
+      " e.length as loa, e.brake_hp as bhp,e.ctrycd_id,",
+      "f.latitude, f.longitude, f.pntcd_id, f.setdate,",
+      "f.settime, f.water_temperature,",
+      "h.fish_id, h.quant_value, h.mrphcd_id, h.mrphvcd_id,",
+      "g.sexcd_id, g.fish_length, g.fish_weight, g.fish_age, g.matcd_id", 
+      "FROM observer.isfishsets a",                   #<- Main table
+      "LEFT OUTER JOIN observer.istrips b ON",        #<- trip info
+      "a.trip_id = b.trip_id",
+      "LEFT OUTER JOIN observer.isgears c ON",        #<- gear
+      "a.gear_id = c.gear_id",
+      "LEFT OUTER JOIN observer.iscatches d ON",      #<- catch (adds per fish data
+      "a.fishset_id = d.fishset_id",
+      "LEFT OUTER JOIN observer.isvessels e ON",
+      "b.vess_id = e.vess_id",
+      "LEFT OUTER JOIN (SELECT fishset_id, set_no, pntcd_id, latitude,",
+      "longitude, setdate, settime, water_temperature",
+      "FROM observer.issetprofile",
+      "WHERE pntcd_id in (1,2,3,4)",          # end of set (2) to start haulback (3)
+      "AND extract(year from setdate) > 1976) f ON",  # location
+      "a.fishset_id = f.fishset_id",
+      "LEFT OUTER JOIN observer.isfish g ON",         # fish detail
+      "d.catch_id = g.catch_id",
+      "LEFT OUTER JOIN observer.isfishmorphs h ON",   # morphology detail
+      "g.fish_id = h.fish_id",
+      "WHERE a.SETCD_ID > 0",                         # commercial data
+      "AND c.gearcd_id in (52,50,55)",                # these are associated with many hooks
+      "AND extract(year from f.setdate) > 1976",
+      "AND h.mrphcd_id in (45,48)", sep=" ")))         # estimated weight in kg and release type
+
+# Gear features
+GearFeat = as.data.table(
+  sqlQuery(channel, paste("select a.gear_id, a.gearfcd_id, a.feature_value,", 
+      "b.feature, b.gearfcl_id",
+      "from observer.ISGEARFEATURES a,",
+      "observer.ISGEARFEATURECODES b ",
+      "where a.GEARFCD_ID = b.GEARFCD_ID",
+      sep=" ")))
+
+# Morphology code definitions
+morphs<-sqlQuery(channel, paste("select MRPHCD_ID, MORPH from observer.ismorphcodes"))
+# 45 = ESTIMATED WEIGHT (KG)
+# 46 = ESTIMATED STANDARD LENGTH (CM)
+# 47 = CAPTURE TYPE
+# 48 = RELEASE TYPE
+# sqlQuery(channel, paste("select * from observer.ismorphvaluecodes where mrphcd_id in (45,48)"))
+#   MRPHCD_ID MRPHVCD_ID         DESCRIPTION
+# 1        48          0 UNABLE TO DETERMINE
+# 2        48          1   ALIVE - NO INJURY
+# 3        48          2     ALIVE - INJURED
+# 4        48          3                DEAD
+# 5        48          4           SHARK BIT
+# 6        48          5            MORIBUND
+```
+
+# This extracts the observer data for cases where we do not have a fish id.
+```{r}
+obsSWO_det2 <- as.data.table(
+  sqlQuery(channel,paste("Select b.trip_id,b.trip,",
+      "b.tripcd_id, b.LICENSE_NO, b.MARFIS_LICENSE_NO, b.vess_id,",
+      "b.board_date, b.landing_date, a.fishset_id,",
+      "ROUND(1+b.landing_date-b.board_date,1) as seadays,",
+      "c.gearcd_id as gear, a.gear_id, c.hookcd_id, c.hooksize,",
+      "a.set_no, a.setcd_id, a.specscd_id, a.est_catch,",
+      "a.nafarea_id, a.num_hook_haul, a.len_longline, a.source as s,",
+      "d.speccd_id, d.est_num_caught, d.est_combined_wt,",
+      " d.est_discard_wt, e.GRT as gross_tonnage, e.cfv,",
+      " e.length as loa, e.brake_hp as bhp,e.ctrycd_id,",
+      "f.latitude, f.longitude, f.pntcd_id, f.setdate,",
+      "f.settime, f.water_temperature,",
+      "g.sexcd_id, g.fish_length, g.fish_weight, g.fish_age, g.matcd_id", 
+      "FROM observer.isfishsets a",                   #<- Main table
+      "LEFT OUTER JOIN observer.istrips b ON",        #<- trip info
+      "a.trip_id = b.trip_id",
+      "LEFT OUTER JOIN observer.isgears c ON",        #<- gear
+      "a.gear_id = c.gear_id",
+      "LEFT OUTER JOIN observer.iscatches d ON",      #<- catch (adds per fish data
+      "a.fishset_id = d.fishset_id",
+      "LEFT OUTER JOIN observer.isvessels e ON",
+      "b.vess_id = e.vess_id",
+      "LEFT OUTER JOIN (SELECT fishset_id, set_no, pntcd_id, latitude,",
+      "longitude, setdate, settime, water_temperature",
+      "FROM observer.issetprofile",
+      "WHERE pntcd_id in (1,2,3,4)",          # end of set (2) to start haulback (3)
+      "AND extract(year from setdate) > 1976) f ON",  # location
+      "a.fishset_id = f.fishset_id",
+      "LEFT OUTER JOIN observer.isfish g ON",         # fish detail
+      "d.catch_id = g.catch_id",
+      "WHERE a.SETCD_ID > 0",                         # commercial data
+      "AND c.gearcd_id in (52,50,55)",
+      "AND extract(year from f.setdate) > 1976",
+      "AND g.fish_id is NULL", sep=" "))) 
+
+# only retain species that may interest us 
+SPECCD = read.csv(file="observer_species.csv") #"C:/Users/hankea/Documents/My_Projects/Swordfish LL Data"
+SPECCD = rbind(SPECCD,data.frame(SPECCD_ID=c(7099,4511),COMMON=c("OTHER","SF SQUID")))
+
+# obsSWO_det2 = obsSWO_det2[SPECCD_ID%in%SPECCD$SPECCD_ID,]
+# obsSWO_det = obsSWO_det[SPECCD_ID%in%SPECCD$SPECCD_ID,]
+
+# create missing columns to allow the two obsSWO_det objects to be merged
+obsSWO_det2[,FISH_ID:=10000*FISHSET_ID+(SPECCD_ID)]
+obsSWO_det2[,QUANT_VALUE:= NA]
+obsSWO_det2[,MRPHCD_ID:= NA]
+obsSWO_det2[,MRPHVCD_ID:= NA]
+obsSWO_det2[,MRPHVCD_ID:= ifelse(EST_COMBINED_WT==EST_DISCARD_WT,0,NA)]
+obsSWO_det2[,MRPHVCD_ID:= ifelse((EST_COMBINED_WT-EST_DISCARD_WT)==EST_COMBINED_WT,9,MRPHVCD_ID)]
+```
+
+We retain only the observed trips of the long-line fishery. In our query above we limited the select to the commercial sets. This limited the trip code to 4 possible options. Had we not limited the select to commercial sets, we may have had the option of including Newfoundland tuna (8073) and swordfish trips (8072),mixed commercial and survey (7000), groundfish trips (7001), porbeagle trips (230) and the north Atlantic Bluefin survey (7059). I say may because our gear choices also affect what we get.
+```{r, echo=FALSE}
+# We use swordfish, swordfish/tuna trips, porbeagle and N.A. Bluefin survey
+obsSWO_det[,.N,by=TRIPCD_ID]
+obsSWO_det = obsSWO_det[TRIPCD_ID%in%c(72,73,230,7059),]
+obsSWO_det2 = obsSWO_det2[TRIPCD_ID%in%c(72,73,230,7059),]
+
+# Append the two objects
+obsSWO_det = rbindlist(list(obsSWO_det,obsSWO_det2), use.names=TRUE, fill=TRUE)
+
+```
+
+So the data, while seemingly quiet wide, is actually in a long format. Each fish caught in a set has its own weight and it is repeated for each point code. The point code 2 marks the end of gear deployment and 3 marks the beginning of haulback. By splitting the data into 2 parts and merging the parts we can produce columns for starting and ending coordinates, times, dates and water temperatures. This will allow use to calculate measures of effort like soak time and length of set which in combination with hook number gives us hook hours, hook density hour etc.
+But first we will do some house cleaning!
+```{r}
+#  SETCD_ID is COMMERCIAL, EXPERIMENTAL, EXPLORATORY and COMMERCIAL INDEX
+obsSWO_det[,.N,SETCD_ID]
+
+# MRPHCD_ID is not required
+obsSWO_det[,MRPHCD_ID := NULL]
+
+# Some of the names are uninformative so we fix that.
+setnames(obsSWO_det, c("QUANT_VALUE","MRPHVCD_ID"),c("INDIV_WT","RELEASE_TYPE" ))
+
+# Combine the SETDATE and SETTIME.
+SETDATETIME = with(obsSWO_det, as.character(strptime(paste(SETDATE,trunc(SETTIME/100),100*(SETTIME/100 - trunc(SETTIME/100)),sep=":"),"%F:%H:%M")))
+
+obsSWO_det[,SETDATETIME:=SETDATETIME]
+rm(SETDATETIME)
+ 
+```
+
+Now let's simplify each component.
+```{r}
+# Divide data into the portion related to setting and haulback and fish details
+obsSWO_det.set = unique(obsSWO_det[,c("FISHSET_ID","LATITUDE","PNTCD_ID","LONGITUDE","WATER_TEMPERATURE","SETDATE","SETTIME","SETDATETIME"),with=F])
+
+obsSWO_det.fish = unique(obsSWO_det[,!names(obsSWO_det)%in%c("LATITUDE","PNTCD_ID","LONGITUDE","WATER_TEMPERATURE","SETDATE","SETTIME","SETDATETIME"),with=F])
+
+MORPHvars = c('INDIV_WT','RELEASE_TYPE')
+
+```
+
+For some fish there is morph data. When present, an additional row was created for a fish. We will reduce this to one row.
+```{r}
+obsSWO_det.fish = merge(unique(obsSWO_det.fish[,!names(obsSWO_det.fish)%in%MORPHvars, with=FALSE]),obsSWO_det.fish[,.(INDIV_WT = sum(INDIV_WT,na.rm=T),NPS = length(INDIV_WT)-sum(!is.na(RELEASE_TYPE)), RELEASE_TYPE = mean(RELEASE_TYPE,na.rm=T)), by= .(FISHSET_ID,SPECCD_ID,FISH_ID)],by=c("FISHSET_ID","SPECCD_ID","FISH_ID"))
+```
+
+Create a species aggregated version of obsSWO_det.fish object. We will aggregate the data to species level within each set. For release type we sum the types 0, 1 and 2 (alive, alive injured) and divide by the total number caught. For commercial species the legal sized fish die and some portion of what is too small to keep.
+```{r}
+# Weight, age and maturity are NA throughout so drop
+obsSWO_det.fish[,MATCD_ID:=NULL]
+obsSWO_det.fish[,FISH_AGE:=NULL]
+obsSWO_det.fish[,FISH_WEIGHT:=NULL]
+# update release type when NA to code 9 representing kept
+obsSWO_det.fish[,RELEASE_TYPE := {ifelse(is.na(RELEASE_TYPE),9,RELEASE_TYPE)}]
+#
+FISHvars = c('FISH_ID','EST_NUM_CAUGHT','EST_COMBINED_WT','EST_DISCARD_WT','INDIV_WT','RELEASE_TYPE','SEXCD_ID','FISH_LENGTH','NPS')
+#
+obsSWO_det.species = merge(unique(obsSWO_det.fish[,!names(obsSWO_det.fish)%in%FISHvars, with=FALSE]), obsSWO_det.fish[,.(EST_NUM_CAUGHT = mean(EST_NUM_CAUGHT,na.rm=T),
+                                 EST_COMBINED_WT = mean(EST_COMBINED_WT,na.rm=T),
+                                 EST_DISCARD_WT = mean(EST_DISCARD_WT,na.rm=T),
+                                 INDIV_WT = mean(INDIV_WT, na.rm = T),
+                                 NPS = sum(!is.na(INDIV_WT)),    # number per species
+                                 DPS = sum(RELEASE_TYPE%in%0:5), # discards per species
+                                 PSURV = sum(RELEASE_TYPE%in%0:2)/length(RELEASE_TYPE),
+                                 PMALES = sum(SEXCD_ID==1)/sum(SEXCD_ID%in%1:2),
+                                 PFEMALES = sum(SEXCD_ID==2)/sum(SEXCD_ID%in%1:2),
+                                 FISH_LENGTH = mean(FISH_LENGTH, na.rm = T)),
+                                 by = c("FISHSET_ID","SPECCD_ID")])
+```
+
+Now let's separate the set data into 4 parts based on the point codes. Rename the fields that refer to information collected at the end of deployment and beginning of haulback.
+```{r}
+obsSWO_det.1 = obsSWO_det.set[PNTCD_ID==1,]
+obsSWO_det.2 = obsSWO_det.set[PNTCD_ID==2,]
+obsSWO_det.3 = obsSWO_det.set[PNTCD_ID==3,]
+obsSWO_det.4 = obsSWO_det.set[PNTCD_ID==4,]
+setnames(obsSWO_det.1,c("LATITUDE","LONGITUDE","WATER_TEMPERATURE","SETDATE","SETTIME","SETDATETIME"),c("LATITUDE1","LONGITUDE1","WATER_TEMPERATURE1","SETDATE1","SETTIME1","SETDATETIME1")) 
+setnames(obsSWO_det.2,c("LATITUDE","LONGITUDE","WATER_TEMPERATURE","SETDATE","SETTIME","SETDATETIME"),c("LATITUDE2","LONGITUDE2","WATER_TEMPERATURE2","SETDATE2","SETTIME2","SETDATETIME2")) 
+setnames(obsSWO_det.3,c("LATITUDE","LONGITUDE","WATER_TEMPERATURE","SETDATE","SETTIME","SETDATETIME"),c("LATITUDE3","LONGITUDE3","WATER_TEMPERATURE3","SETDATE3","SETTIME3","SETDATETIME3")) 
+setnames(obsSWO_det.4,c("LATITUDE","LONGITUDE","WATER_TEMPERATURE","SETDATE","SETTIME","SETDATETIME"),c("LATITUDE4","LONGITUDE4","WATER_TEMPERATURE4","SETDATE4","SETTIME4","SETDATETIME4")) 
+obsSWO_det.1[,PNTCD_ID:=NULL]
+obsSWO_det.2[,PNTCD_ID:=NULL]
+obsSWO_det.3[,PNTCD_ID:=NULL]
+obsSWO_det.4[,PNTCD_ID:=NULL]
+```
+
+Merge the parts together.
+```{r}
+obsSWO_det.fish = merge(obsSWO_det.fish,obsSWO_det.1,by="FISHSET_ID",all.x=T)
+obsSWO_det.fish = merge(obsSWO_det.fish,obsSWO_det.2,by="FISHSET_ID",all.x=T)
+obsSWO_det.fish = merge(obsSWO_det.fish,obsSWO_det.3,by="FISHSET_ID",all.x=T)
+obsSWO_det.fish = merge(obsSWO_det.fish,obsSWO_det.4,by="FISHSET_ID",all.x=T)
+#
+obsSWO_det.species = merge(obsSWO_det.species,obsSWO_det.1,by="FISHSET_ID",all.x=T)
+obsSWO_det.species = merge(obsSWO_det.species,obsSWO_det.2,by="FISHSET_ID",all.x=T)
+obsSWO_det.species = merge(obsSWO_det.species,obsSWO_det.3,by="FISHSET_ID",all.x=T)
+obsSWO_det.species = merge(obsSWO_det.species,obsSWO_det.4,by="FISHSET_ID",all.x=T)
+```
+
+Now lets calcualte soak time.
+```{r}
+# Soak time
+obsSWO_det.fish[,SOAK_TIME:=(strptime(SETDATETIME4,"%Y-%m-%d %H:%M:%S")-strptime(SETDATETIME1,"%Y-%m-%d %H:%M:%S"))/3600]
+
+obsSWO_det.species[,SOAK_TIME:=(strptime(SETDATETIME4,"%Y-%m-%d %H:%M:%S")-strptime(SETDATETIME1,"%Y-%m-%d %H:%M:%S"))/3600]
+```
+
+
+This is where we deal with known exceptions. One correction we must make is related to a split trip that occurred in 2006. It looks like one continuous trip with 2 boarding and landing dates. In the commercial data there is only one trip. 
+```{r}
+# TRIP_ID=100022505 and 100022504 are part of the same trip.
+obsSWO_det.fish[,TRIP_ID:={ifelse(TRIP_ID==100022505,100022504,TRIP_ID)}]
+obsSWO_det.species[,TRIP_ID:={ifelse(TRIP_ID==100022505,100022504,TRIP_ID)}]
+```
+
+Add in gear features. This creates a few more columns.
+```{r}
+GearFeat = GearFeat[][GEAR_ID%in%unique(obsSWO_det.fish[,GEAR_ID]),]
+
+# Perform a series of casting operations followed by aggregation to put the data in the correct format, i.e. one row per gear_id
+GearFeat = dcast(GearFeat,GEAR_ID+GEARFCD_ID+FEATURE_VALUE~GEARFCL_ID,value.var="FEATURE")
+names(GearFeat) = gsub(" ","_",names(GearFeat))
+
+GearFeat = dcast(GearFeat, GEAR_ID+BAIT_TYPES+HOOK_MAKERS + HOOK_TYPES~ GEAR_DIMENSIONS, value.var="FEATURE_VALUE", function(x) x[!is.na(x)][1])
+names(GearFeat) = gsub(" ","_",names(GearFeat))
+names(GearFeat) = gsub("[(,)]","",names(GearFeat))
+
+GearFeat = as.data.table(GearFeat)
+
+FIRST = function(x) x[!is.na(x)][1]
+
+GearFeat =                  GearFeat[,.(BAIT_TYPE =  FIRST(BAIT_TYPES),
+                            HOOK_MAKER = FIRST(HOOK_MAKERS),
+                            HOOK_TYPE = FIRST(HOOK_TYPES),
+                            DIST_BTW_FLOATS_M = FIRST(DISTANCE_BETWEEN_FLOATS_M),
+                            DIST_BTW_HOOKS_M = FIRST(DISTANCE_BETWEEN_HOOKS_M),
+                            DIST_BTW_LIGHT_BUOYS_KM = FIRST(LENGTH_BETWEEN_LIGHT_BUOYS_KM),
+                            DIST_BTW_RADIO_BUOYS_KM = FIRST(LENGTH_BETWEEN_RADIO_BUOYS_KM),
+                            LEN_OF_GANGION_M = FIRST(LENGTH_OF_GANGINGS_M),
+                            N_HOOKS_BTW_FLOATS = FIRST(NUMBER_OF_HOOKS_BETWEEN_FLOATS)),
+                            by = "GEAR_ID"]
+
+# save(obsSWO_det.species,obsSWO_det.fish,GearFeat,file="SWO_LL_Observer_JointIndexData.R")
+```
+
+Add in the gear features and produce a version for general distribution.
+```{r}
+FISHvars = c('FISHSET_ID','SPECCD_ID','FISH_ID','TRIP_ID','TRIP','TRIPCD_ID','VESS_ID','BOARD_DATE','LANDING_DATE','SEADAYS','GEAR','HOOKCD_ID','HOOKSIZE','SET_NO','SETCD_ID','SPECSCD_ID','EST_CATCH','NAFAREA_ID','NUM_HOOK_HAUL','LEN_LONGLINE','S','EST_NUM_CAUGHT','EST_COMBINED_WT','EST_DISCARD_WT','GROSS_TONNAGE','CFV','LOA','BHP','CTRYCD_ID','SEXCD_ID','FISH_LENGTH','INDIV_WT','NPS','RELEASE_TYPE','LATITUDE1','LONGITUDE1','WATER_TEMPERATURE1','SETDATE1','SETTIME1','SETDATETIME1','LATITUDE2','LONGITUDE2','WATER_TEMPERATURE2','SETDATE2','SETTIME2','SETDATETIME2','LATITUDE3','LONGITUDE3','WATER_TEMPERATURE3','SETDATE3','SETTIME3','SETDATETIME3','LATITUDE4','LONGITUDE4','WATER_TEMPERATURE4','SETDATE4','SETTIME4','SETDATETIME4','SOAK_TIME')
+
+SPECIESvars = c('FISHSET_ID','SPECCD_ID','TRIP_ID','TRIP','TRIPCD_ID','VESS_ID','BOARD_DATE','LANDING_DATE','SEADAYS','GEAR','GEAR_ID','HOOKCD_ID','HOOKSIZE','SET_NO','SETCD_ID','SPECSCD_ID','EST_CATCH','NAFAREA_ID','NUM_HOOK_HAUL','LEN_LONGLINE','S','GROSS_TONNAGE','CFV','LOA','BHP','CTRYCD_ID','EST_NUM_CAUGHT','EST_COMBINED_WT','EST_DISCARD_WT','INDIV_WT','NPS','DPS','PSURV','PMALES','PFEMALES','FISH_LENGTH','LATITUDE1','LONGITUDE1','WATER_TEMPERATURE1','SETDATE1','SETTIME1','SETDATETIME1','LATITUDE2','LONGITUDE2','WATER_TEMPERATURE2','SETDATE2','SETTIME2','SETDATETIME2','LATITUDE3','LONGITUDE3','WATER_TEMPERATURE3','SETDATE3','SETTIME3','SETDATETIME3','LATITUDE4','LONGITUDE4','WATER_TEMPERATURE4','SETDATE4','SETTIME4','SETDATETIME4','SOAK_TIME')
+
+GEARvars = c('BAIT_TYPE','HOOK_MAKER','HOOK_TYPE','DIST_BTW_FLOATS_M','DIST_BTW_HOOKS_M','DIST_BTW_LIGHT_BUOYS_KM','DIST_BTW_RADIO_BUOYS_KM','LEN_OF_GANGION_M','N_HOOKS_BTW_FLOATS')
+
+# 
+obsSWO_det.fish = merge(obsSWO_det.fish,GearFeat,by="GEAR_ID", all.x=T)
+obsSWO_det.species = merge(obsSWO_det.species,GearFeat,by="GEAR_ID", all.x=T)
+
+# Change vessel id
+obsSWO_det.fish[,VESS_ID := scale(VESS_ID,scale=F)+abs(min(scale(VESS_ID,scale=F)))]
+obsSWO_det.species[,VESS_ID := scale(VESS_ID,scale=F)+abs(min(scale(VESS_ID,scale=F)))]
+
+write.csv(obsSWO_det.fish[,c(FISHvars,GEARvars),with=F],file="SWO_LL_Observer_JointIndexData_fish.csv",row.names=F)
+write.csv(obsSWO_det.species[,c(SPECIESvars,GEARvars),with=F],file="SWO_LL_Observer_JointIndexData_species.csv",row.names=F)
+```
+
